@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Bilibili 视频截图按钮（带快捷键 + 右侧提示 + 蓝色成功）
+// @name         Bilibili 视频截图按钮（带快捷键 + 居中提示 + 8px圆角）
 // @namespace    https://github.com/Kflho
-// @version      0.8.8
-// @description  截图按钮 + Ctrl+Shift+S，提示显示在按钮右侧，内容居中
+// @version      1.0.5
+// @description  截图按钮 + Ctrl+Shift+S，弹窗水平居中垂直对齐按钮，圆角8px
 // @author       Kflho
 // @match        http*://www.bilibili.com/*
 // @match        http*://live.bilibili.com/*
@@ -26,7 +26,7 @@
             color: '#ffffff',
             fontSize: '15px',
             cursor: 'pointer',
-            borderRadius: '10px',
+            borderRadius: '8px',          // B站风格微小圆角
             border: '0px solid #ffffff',
             paddingLeft: '10px',
             paddingRight: '10px',
@@ -52,7 +52,7 @@
         console.log(`${CONFIG.logPrefix} ${message}`);
     }
 
-    // ---------- Toast 提示（定位在按钮右侧，内容居中） ----------
+    // ---------- Toast 提示（水平居中，垂直与按钮对齐，8px圆角） ----------
     function showToast(message, isSuccess, anchorElement) {
         const oldToast = document.getElementById('biliScreenshotToast');
         if (oldToast) oldToast.remove();
@@ -70,8 +70,8 @@
             : 'rgba(244, 67, 54, 0.92)';
 
         const baseStyle = {
-            padding: '4px 12px',
-            borderRadius: '6px',
+            padding: '2px 10px',
+            borderRadius: '8px',           // B站风格微小圆角
             fontSize: '15px',
             fontWeight: 'bold',
             color: '#ffffff',
@@ -84,33 +84,28 @@
             fontFamily: 'sans-serif',
             whiteSpace: 'nowrap',
             position: 'fixed',
-            textAlign: 'center'   // 👈 内容水平居中
+            textAlign: 'center',
+            lineHeight: '1.2'
         };
         Object.assign(toast.style, baseStyle);
 
-        // ----- 定位逻辑：优先放右侧，右侧不足则放左侧 -----
+        // ----- 定位：水平居中，垂直与按钮中心对齐 -----
         if (anchorElement) {
             const rect = anchorElement.getBoundingClientRect();
-            const gap = 8;
-            const toastWidth = 160;
-            const rightSpace = window.innerWidth - rect.right;
-            const leftSpace = rect.left;
-
-            if (rightSpace < toastWidth && leftSpace > toastWidth) {
-                toast.style.right = (window.innerWidth - rect.left + gap) + 'px';
-                toast.style.left = 'auto';
-                toast.style.top = (rect.top + rect.height / 2) + 'px';
-                toast.style.transform = 'translateY(-50%)';
-            } else {
-                toast.style.left = (rect.right + gap) + 'px';
-                toast.style.top = (rect.top + rect.height / 2) + 'px';
-                toast.style.transform = 'translateY(-50%)';
-            }
+            const centerY = rect.top + rect.height / 2;
+            toast.style.left = '50%';
+            toast.style.top = centerY + 'px';
+            toast.style.transform = 'translateX(-50%) translateY(-50%)';
+            toast.style.bottom = 'auto';
+            toast.style.right = 'auto';
         } else {
+            // 无锚点（回退）
             toast.style.left = '50%';
             toast.style.bottom = '80px';
             toast.style.transform = 'translateX(-50%)';
+            toast.style.top = 'auto';
         }
+        // ----------------------------------
 
         document.body.appendChild(toast);
 
