@@ -9,6 +9,8 @@
 // @icon         https://www.bilibili.com/favicon.ico
 // @grant        none
 // @license      MIT
+// @downloadURL  https://raw.githubusercontent.com/Kflho/bilibili-screenshot-userscript/refs/heads/main/bilibili-screenshot-userscript.js
+// @updateURL    https://raw.githubusercontent.com/Kflho/bilibili-screenshot-userscript/refs/heads/main/bilibili-screenshot-userscript.js
 // ==/UserScript==
 
 (function () {
