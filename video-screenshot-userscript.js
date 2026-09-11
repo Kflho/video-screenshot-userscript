@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         视频截图（通用版 · 快捷键 + B站按钮）
 // @namespace    https://github.com/Kflho
-// @version      1.0.0
+// @version      1.0.1
 // @description  任意视频网页按 Ctrl+Shift+S 截图到剪贴板；命中站点规则时额外注入按钮
 // @author       Kflho
 // @match        http*://*/*
@@ -9,6 +9,8 @@
 // @run-at       document-idle
 // @grant        none
 // @license      MIT
+// @downloadURL  https://raw.githubusercontent.com/Kflho/bilibili-screenshot-userscript/refs/heads/main/video-screenshot-userscript.js
+// @updateURL    https://raw.githubusercontent.com/Kflho/bilibili-screenshot-userscript/refs/heads/main/video-screenshot-userscript.js
 // ==/UserScript==
 
 (function () {
