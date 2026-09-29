@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         视频截图（通用版 · 悬浮按钮 + 跨域 iframe 中继）
+// @name         视频截图助手
 // @namespace    https://github.com/Kflho
-// @version      1.2.1
-// @description  任意视频网页按 Ctrl+Shift+S 截图到剪贴板；视频画面角落自动出现「截屏」按钮，不用为每个站点写规则；视频藏在跨域 iframe 里也能截
+// @version      1.2.2
+// @description  任意网页视频一键截图到剪贴板：Ctrl+Shift+S 或视频画面角落的「截屏」按钮。自动适配跨域 iframe 播放器（谁有画面谁抓帧、谁有剪贴板权限谁写入），无需为每个网站写规则。
 // @author       Kflho
 // @match        http*://*/*
 // @icon         data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ctext y='14' font-size='14'%3E%F0%9F%93%B7%3C/text%3E%3C/svg%3E
