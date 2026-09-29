@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         视频截图助手
+// @name         视频截图到剪贴板
 // @namespace    https://github.com/Kflho
-// @version      1.2.2
-// @description  任意网页视频一键截图到剪贴板：Ctrl+Shift+S 或视频画面角落的「截屏」按钮。自动适配跨域 iframe 播放器（谁有画面谁抓帧、谁有剪贴板权限谁写入），无需为每个网站写规则。
+// @version      1.2.3
+// @description  Ctrl+Shift+S 或点视频画面角落的「截屏」按钮，把当前画面复制到剪贴板，直接粘进聊天框/文档。自动适配跨域 iframe 播放器（谁有画面谁抓帧、谁有剪贴板权限谁写入），无需为每个网站写规则。
 // @author       Kflho
 // @match        http*://*/*
 // @icon         data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ctext y='14' font-size='14'%3E%F0%9F%93%B7%3C/text%3E%3C/svg%3E
