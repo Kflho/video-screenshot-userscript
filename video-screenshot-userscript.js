@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         视频截图（通用版 · 悬浮按钮 + 跨域 iframe 中继）
 // @namespace    https://github.com/Kflho
-// @version      1.2.0
+// @version      1.2.1
 // @description  任意视频网页按 Ctrl+Shift+S 截图到剪贴板；视频画面角落自动出现「截屏」按钮，不用为每个站点写规则；视频藏在跨域 iframe 里也能截
 // @author       Kflho
 // @match        http*://*/*
@@ -9,8 +9,8 @@
 // @run-at       document-idle
 // @grant        none
 // @license      MIT
-// @downloadURL  https://raw.githubusercontent.com/Kflho/bilibili-screenshot-userscript/refs/heads/main/video-screenshot-userscript.js
-// @updateURL    https://raw.githubusercontent.com/Kflho/bilibili-screenshot-userscript/refs/heads/main/video-screenshot-userscript.js
+// @downloadURL  https://raw.githubusercontent.com/Kflho/video-screenshot-userscript/refs/heads/main/video-screenshot-userscript.js
+// @updateURL    https://raw.githubusercontent.com/Kflho/video-screenshot-userscript/refs/heads/main/video-screenshot-userscript.js
 // ==/UserScript==
 
 // ============================================================================
