@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         视频截图（通用版 · 跨域 iframe 中继 + 快捷键 + B站按钮）
+// @name         视频截图（通用版 · 悬浮按钮 + 跨域 iframe 中继）
 // @namespace    https://github.com/Kflho
-// @version      1.1.0
-// @description  任意视频网页按 Ctrl+Shift+S 截图到剪贴板；视频藏在跨域 iframe 里也能截（自动中继到顶层写剪贴板）
+// @version      1.2.0
+// @description  任意视频网页按 Ctrl+Shift+S 截图到剪贴板；视频画面角落自动出现「截屏」按钮，不用为每个站点写规则；视频藏在跨域 iframe 里也能截
 // @author       Kflho
 // @match        http*://*/*
 // @icon         data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ctext y='14' font-size='14'%3E%F0%9F%93%B7%3C/text%3E%3C/svg%3E
@@ -30,6 +30,15 @@
 //
 //   子框架按快捷键（焦点在播放器里/全屏时）─ 自己抓帧 ─▶ 写剪贴板被策略拒绝
 //                └──write-request(Blob)──▶ 顶层写入 ──write-result──▶ 子框架提示
+//
+// 关于「按钮」：
+//   站点千千万，为每个站点写「按钮插到哪个选择器后面」是写不完的，而且播放器一改版就失效。
+//   所以默认走通用方案——在视频画面角落浮一个按钮：
+//     · 谁持有 <video> 就在谁的文档里画（所以视频在跨域 iframe 里也照样显示在画面上）
+//     · position:fixed + getBoundingClientRect 跟随视频，改版/换播放器都不受影响
+//     · 全屏时挂进全屏元素，照样看得见
+//   想在某站用「正统」位置（像 B 站那样插在标题旁边），再往 SITE_RULES 里加一行即可，
+//   命中站点规则的站点会自动改用内联按钮、不再显示悬浮按钮。
 // ============================================================================
 
 (function () {
@@ -57,6 +66,17 @@
         hoverStyle: {
             backgroundColor: 'rgba(0,174,236, 1)'
         },
+        // 通用悬浮按钮：不依赖任何站点选择器
+        autoButton: {
+            enabled: true,
+            corner: 'top-right',          // top-right | top-left | bottom-right | bottom-left
+            inset: 12,                    // 距画面边缘的像素
+            minWidth: 280,                // 视频小于这个尺寸就不打扰（过滤广告位/缩略图预览）
+            minHeight: 160,
+            minVisibleRatio: 0.3,         // 至少这么多比例露在视口里才显示
+            idleOpacity: 0.55,            // 平时半透明，鼠标移上去变清晰
+            pollInterval: 800             // 跟随视频位置的刷新间隔（滚动/缩放/全屏另有事件）
+        },
         checkInterval: 1000,              // 命中站点规则后，等待锚点出现的轮询间隔
         maxCheckTimes: 30,                // 最多等 30 次，之后退回插到视频后面
         shortcut: {
@@ -70,7 +90,8 @@
         relay: {                          // 跨框架中继参数
             key: '__videoScreenshotMsg',  // 消息标识，避免和站点自己的 postMessage 撞车
             collectWindow: 250,           // 收到第一个子框架结果后，再等这么久收其它结果（选面积最大的）
-            captureTimeout: 1500,         // 等子框架抓帧的总超时
+            captureTimeout: 1500,         // 等子框架抓帧的总超时（没人有视频时就该这么快报错）
+            ackTimeout: 10000,            // 子框架已确认「我有视频」后的等待上限（可能要走 CORS 兜底，慢）
             writeTimeout: 3000,           // 等顶层写剪贴板的超时
             maxHops: 6                    // capture-request 最多向下转发几层
         },
@@ -78,13 +99,13 @@
         downloadFallback: true            // 剪贴板彻底不可用时，退化为下载 PNG
     };
 
-    // ---------- 站点规则表 ----------
-    // 命中才注入按钮；未命中的站点不注入任何 UI，仅保留快捷键（含跨框架中继）。
-    // 想支持新站点，在这里加一行 host + 按钮要插到哪个选择器后面即可。
+    // ---------- 站点规则表（可选覆盖，不是必需品） ----------
+    // 默认所有站点都用通用悬浮按钮，不需要在这里登记。
+    // 只有当某站希望按钮出现在「正经位置」（例如 B 站标题栏旁边）时，才加一行
+    // host + 锚点选择器；命中规则的站点会改用内联按钮，并且不再显示悬浮按钮。
     const SITE_RULES = [
         { host: 'live.bilibili.com', anchor: '.follow-ctnr' },
-        { host: 'www.bilibili.com', anchor: '.pubdate-ip' },
-        { host: 'www.gzdfyz.com', anchor: '.player-episode-info' }   // 桔子影院：视频在 img.gzdfyz.com 的跨域 iframe 里
+        { host: 'www.bilibili.com', anchor: '.pubdate-ip' }
     ];
 
     const IS_TOP = (function () {
@@ -446,6 +467,7 @@
                 const id = newId();
                 let settled = false;
                 let collectTimer = null;
+                let hardTimer = null;
                 const shots = [];
                 const errors = [];
 
@@ -459,13 +481,24 @@
                     resolve({ shot: shots[0] || null, error: errors[0] || '' });
                 };
 
-                const hardTimer = setTimeout(function () {
+                hardTimer = setTimeout(function () {
                     if (!settled && !shots.length && !errors.length) log('等待子框架抓帧超时');
                     finish();
                 }, CONFIG.relay.captureTimeout);
 
                 pending.set(id, {
                     collect: true,
+                    // 子框架先回一声「我有视频，正在抓」：可能要走 CORS 兜底等好几秒，
+                    // 这时把等待上限放宽，别让用户看到一个假的「未找到有效视频」。
+                    onAck: function () {
+                        if (settled) return;
+                        log('子框架确认有视频，正在抓帧（延长等待）');
+                        clearTimeout(hardTimer);
+                        hardTimer = setTimeout(function () {
+                            if (!settled && !shots.length) log('子框架抓帧超时（已确认有视频）');
+                            finish();
+                        }, CONFIG.relay.ackTimeout);
+                    },
                     onResult: function (shot, error) {
                         if (settled) return;
                         if (shot) shots.push(shot);
@@ -526,6 +559,7 @@
             const video = getBestVideo();
             if (video) {
                 log('收到抓帧请求，本框架有视频，开始抓帧');
+                post(event.source, { [KEY]: 1, kind: 'capture-ack', id: data.id });   // 先应答，别让上层等急了
                 captureFrame(video).then(function (shot) {
                     log('抓帧完成 ' + shot.width + 'x' + shot.height + '，回传给请求方');
                     post(event.source, {
@@ -544,6 +578,13 @@
             if (hops <= CONFIG.relay.maxHops && window.frames.length) {
                 postToChildren({ [KEY]: 1, kind: 'capture-request', id: data.id, hops: hops });
             }
+        }
+
+        // 子框架的「我有视频」应答：不是自己发起的就继续往上传
+        function handleCaptureAck(data, event) {
+            const entry = pending.get(data.id);
+            if (entry && entry.collect && entry.onAck) { entry.onAck(); return; }
+            if (isMyChild(event.source) && !IS_TOP) post(window.parent, data);
         }
 
         function handleCaptureResult(data, event) {
@@ -568,6 +609,17 @@
             if (entry) entry.onResult({ ok: !!data.ok, reason: data.reason || '' });
         }
 
+        // 顶层已经插好内联按钮 → 让子框架收起悬浮按钮，免得同一页出现两个「截屏」
+        function handleInlineButton(data, event) {
+            if (!isMyParent(event.source)) return;
+            floater.suppress();
+            if (window.frames.length) postToChildren(data);   // 继续往下传，穿透嵌套 iframe
+        }
+
+        function notifyInlineButton() {
+            postToChildren({ [KEY]: 1, kind: 'inline-button' });
+        }
+
         function install() {
             window.addEventListener('message', function (event) {
                 const data = event.data;
@@ -575,9 +627,11 @@
 
                 switch (data.kind) {
                     case 'capture-request': handleCaptureRequest(data, event); break;
+                    case 'capture-ack': handleCaptureAck(data, event); break;
                     case 'capture-result': handleCaptureResult(data, event); break;
                     case 'write-request': handleWriteRequest(data, event); break;
                     case 'write-result': handleWriteResult(data); break;
+                    case 'inline-button': handleInlineButton(data, event); break;
                 }
             });
             log('跨框架中继已就绪（' + (IS_TOP ? '顶层' : '子框架') + '）');
@@ -586,7 +640,8 @@
         return {
             install: install,
             captureFromDescendants: captureFromDescendants,
-            requestTopWrite: requestTopWrite
+            requestTopWrite: requestTopWrite,
+            notifyInlineButton: notifyInlineButton
         };
     })();
     // ----------------------------------
@@ -724,10 +779,8 @@
     }
     // ----------------------------------
 
-    // ---------- 按钮注入（仅命中站点规则的站点） ----------
-    function addScreenShotEle(insertAfter) {
-        if (document.getElementById(CONFIG.buttonId)) return;
-
+    // ---------- 按钮 ----------
+    function makeButton() {
         const btn = document.createElement('button');
         btn.textContent = CONFIG.buttonText;
         btn.className = CONFIG.buttonClass;
@@ -736,9 +789,11 @@
 
         btn.addEventListener("mouseover", function () {
             btn.style.backgroundColor = CONFIG.hoverStyle.backgroundColor;
+            btn.style.opacity = '1';
         });
         btn.addEventListener("mouseout", function () {
             btn.style.backgroundColor = CONFIG.buttonStyle.backgroundColor;
+            if (btn.dataset.floating) btn.style.opacity = String(CONFIG.autoButton.idleOpacity);
         });
 
         btn.addEventListener("click", function (event) {
@@ -747,9 +802,137 @@
                 log('截图流程异常: ' + err);
             });
         });
+        return btn;
+    }
 
+    // 视频露在视口内的面积占比（滚出屏幕 / 被裁掉时用来隐藏按钮）
+    function visibleRatio(el) {
+        const rect = el.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) return 0;
+        const w = Math.max(0, Math.min(rect.right, window.innerWidth) - Math.max(rect.left, 0));
+        const h = Math.max(0, Math.min(rect.bottom, window.innerHeight) - Math.max(rect.top, 0));
+        return (w * h) / (rect.width * rect.height);
+    }
+
+    function overlayHost() {
+        // 全屏时只有全屏元素（及其后代）会被渲染，按钮要挂到它里面才看得见
+        return document.fullscreenElement || document.webkitFullscreenElement || document.body || document.documentElement;
+    }
+
+    // ---------- 通用悬浮按钮（不依赖站点选择器） ----------
+    // 谁持有 <video> 就在谁的文档里画按钮，直接贴在画面角落上：
+    //   · 视频在跨域 iframe 里 → 按钮就画在那个 iframe 的画面上，位置天然正确
+    //   · 播放器改版 / 换播放器 / SPA 换集 → 按钮跟着视频元素走，不受影响
+    const floater = (function () {
+        let btn = null;
+        let shownFor = null;
+        let suppressed = false;      // 页面里已经有内联按钮时不再显示
+
+        function pickVideo() {
+            const video = getBestVideo();
+            if (!video) return null;
+
+            const rect = video.getBoundingClientRect();
+            if (rect.width < CONFIG.autoButton.minWidth || rect.height < CONFIG.autoButton.minHeight) return null;
+            if (visibleRatio(video) < CONFIG.autoButton.minVisibleRatio) return null;
+            return video;
+        }
+
+        function hide() {
+            if (btn && btn.style.display !== 'none') btn.style.display = 'none';
+            shownFor = null;
+        }
+
+        function place(video) {
+            // 全屏元素本身就是 <video> 时，里面塞不进任何东西（video 的子元素不参与渲染）
+            const fs = document.fullscreenElement || document.webkitFullscreenElement;
+            if (fs === video) return false;
+
+            const parent = overlayHost();
+            if (btn.parentNode !== parent) parent.appendChild(btn);
+
+            const rect = video.getBoundingClientRect();
+            const inset = CONFIG.autoButton.inset;
+            const w = btn.offsetWidth || 64;
+            const h = btn.offsetHeight || 28;
+            const corner = CONFIG.autoButton.corner;
+
+            let left = corner.indexOf('left') !== -1 ? rect.left + inset : rect.right - w - inset;
+            let top = corner.indexOf('top') !== -1 ? rect.top + inset : rect.bottom - h - inset;
+            left = Math.max(4, Math.min(left, window.innerWidth - w - 4));
+            top = Math.max(4, Math.min(top, window.innerHeight - h - 4));
+
+            btn.style.left = left + 'px';
+            btn.style.top = top + 'px';
+            btn.style.display = '';
+            return true;
+        }
+
+        function update() {
+            if (!CONFIG.autoButton.enabled || suppressed || getSiteRule()) return hide();
+
+            const video = pickVideo();
+            if (!video) return hide();
+
+            if (!btn) {
+                btn = makeButton();
+                btn.dataset.floating = '1';
+                Object.assign(btn.style, {
+                    position: 'fixed',
+                    zIndex: '2147483646',
+                    opacity: String(CONFIG.autoButton.idleOpacity),
+                    userSelect: 'none',
+                    marginBottom: '0',
+                    boxShadow: '0 2px 8px rgba(0,0,0,0.3)'
+                });
+            }
+
+            if (!place(video)) return hide();
+            if (shownFor !== video) log('已在视频画面角落显示悬浮截图按钮');
+            shownFor = video;
+        }
+
+        // 页面别处已经有内联按钮（本站命中站点规则，或顶层已经插好）→ 收起悬浮按钮
+        function suppress() {
+            if (suppressed) return;
+            suppressed = true;
+            hide();
+            log('页面已有内联截图按钮，收起悬浮按钮');
+        }
+
+        return { update: update, hide: hide, suppress: suppress };
+    })();
+
+    function startFloatingWatcher() {
+        if (!CONFIG.autoButton.enabled || getSiteRule()) return;
+
+        let queued = false;
+        const tick = function () {
+            if (queued) return;
+            queued = true;
+            requestAnimationFrame(function () {
+                queued = false;
+                try { floater.update(); } catch (err) { log('悬浮按钮刷新异常: ' + err); }
+            });
+        };
+
+        setInterval(tick, CONFIG.autoButton.pollInterval);
+        window.addEventListener('scroll', tick, true);      // 捕获阶段，内层滚动容器也算
+        window.addEventListener('resize', tick);
+        document.addEventListener('fullscreenchange', tick);
+        document.addEventListener('webkitfullscreenchange', tick);
+        tick();
+    }
+    // ----------------------------------
+
+    // ---------- 内联按钮注入（仅命中站点规则的站点） ----------
+    function addScreenShotEle(insertAfter) {
+        if (document.getElementById(CONFIG.buttonId)) return;
+        const btn = makeButton();
         insertAfter.insertAdjacentElement('afterend', btn);
         log("截图按钮已添加");
+        floater.suppress();            // 本框架用内联按钮
+        relay.notifyInlineButton();    // 告诉子框架也别再显示悬浮按钮
     }
 
     function startButtonWatcher() {
@@ -855,10 +1038,11 @@
         window.addEventListener('keydown', handleKeyDown, true);
         log(`快捷键已启用：${shortcutText()}（输入框内不触发）`);
 
-        startButtonWatcher();
-        if (!getSiteRule()) {
-            log('未命中站点规则，本站点仅支持快捷键截图');
-        }
+        startButtonWatcher();      // 命中了站点规则 → 内联按钮
+        startFloatingWatcher();    // 没命中 → 通用悬浮按钮，视频画面上见
+        log(getSiteRule()
+            ? '本站命中站点规则，使用内联按钮'
+            : '未命中站点规则，使用通用悬浮按钮 + 快捷键');
     }
 
     init();
