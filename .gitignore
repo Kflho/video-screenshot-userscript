@@ -1,7 +1,15 @@
-﻿
+
 # 本地依赖/临时文件
 node_modules/
 temp/
 *.log
 .env
 .env.*
+
+# 本机配置/密钥
+local.json
+local.*.json
+!local.example.json
+project.json
+*.pem
+*.key
