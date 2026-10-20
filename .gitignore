@@ -1,0 +1,7 @@
+﻿
+# 本地依赖/临时文件
+node_modules/
+temp/
+*.log
+.env
+.env.*
