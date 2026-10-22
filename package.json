@@ -1,0 +1,9 @@
+{
+  "name": "video-screenshot-userscript",
+  "private": true,
+  "version": "0.0.0",
+  "description": "油猴脚本：视频截图到剪贴板（测试只做语法与元数据 smoke）",
+  "scripts": {
+    "test": "node --test test/smoke.test.mjs"
+  }
+}
