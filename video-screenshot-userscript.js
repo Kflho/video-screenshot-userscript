@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         视频截图到剪贴板
 // @namespace    https://github.com/Kflho
-// @version      1.2.3
+// @version      1.2.5
 // @description  Ctrl+Shift+S 或点视频画面角落的「截屏」按钮，把当前画面复制到剪贴板，直接粘进聊天框/文档。自动适配跨域 iframe 播放器（谁有画面谁抓帧、谁有剪贴板权限谁写入），无需为每个网站写规则。
 // @author       Kflho
 // @match        http*://*/*
@@ -36,7 +36,7 @@
 //   所以默认走通用方案——在视频画面角落浮一个按钮：
 //     · 谁持有 <video> 就在谁的文档里画（所以视频在跨域 iframe 里也照样显示在画面上）
 //     · position:fixed + getBoundingClientRect 跟随视频，改版/换播放器都不受影响
-//     · 全屏时挂进全屏元素，照样看得见
+//     · 全屏时不显示：全屏画面就是视频本身，按钮只会挡住画面；快捷键 Ctrl+Shift+S 照样能用
 //   想在某站用「正统」位置（像 B 站那样插在标题旁边），再往 SITE_RULES 里加一行即可，
 //   命中站点规则的站点会自动改用内联按钮、不再显示悬浮按钮。
 // ============================================================================
@@ -814,10 +814,18 @@
         return (w * h) / (rect.width * rect.height);
     }
 
-    function overlayHost() {
-        // 全屏时只有全屏元素（及其后代）会被渲染，按钮要挂到它里面才看得见
-        return document.fullscreenElement || document.webkitFullscreenElement || document.body || document.documentElement;
+    // 全屏时不显示按钮：全屏画面就是视频本身，按钮只会挡画面，而快捷键照样能用；
+    // 顺带一个好处——不必再把按钮挂进全屏元素（那是站点 DOM，可能插进 SSR 节点里）。
+    function inFullscreen() {
+        return !!(document.fullscreenElement || document.webkitFullscreenElement);
     }
+
+    function overlayHost() {
+        return document.body || document.documentElement;
+    }
+
+    // 命中站点规则但锚点一直没出现时，允许退回悬浮按钮（否则这个站就没有按钮可用）
+    let allowFloaterOnSiteRule = false;
 
     // ---------- 通用悬浮按钮（不依赖站点选择器） ----------
     // 谁持有 <video> 就在谁的文档里画按钮，直接贴在画面角落上：
@@ -844,10 +852,6 @@
         }
 
         function place(video) {
-            // 全屏元素本身就是 <video> 时，里面塞不进任何东西（video 的子元素不参与渲染）
-            const fs = document.fullscreenElement || document.webkitFullscreenElement;
-            if (fs === video) return false;
-
             const parent = overlayHost();
             if (btn.parentNode !== parent) parent.appendChild(btn);
 
@@ -865,11 +869,12 @@
             btn.style.left = left + 'px';
             btn.style.top = top + 'px';
             btn.style.display = '';
-            return true;
         }
 
         function update() {
-            if (!CONFIG.autoButton.enabled || suppressed || getSiteRule()) return hide();
+            // 全屏只看画面，按钮收起来（快捷键仍在）
+            if (inFullscreen()) return hide();
+            if (!CONFIG.autoButton.enabled || suppressed || (!allowFloaterOnSiteRule && getSiteRule())) return hide();
 
             const video = pickVideo();
             if (!video) return hide();
@@ -887,7 +892,7 @@
                 });
             }
 
-            if (!place(video)) return hide();
+            place(video);
             if (shownFor !== video) log('已在视频画面角落显示悬浮截图按钮');
             shownFor = video;
         }
@@ -903,8 +908,18 @@
         return { update: update, hide: hide, suppress: suppress };
     })();
 
-    function startFloatingWatcher() {
-        if (!CONFIG.autoButton.enabled || getSiteRule()) return;
+    let floatingWatcherStarted = false;
+
+    /**
+     * @param {boolean} [force] 站点命中规则但锚点始终没出现时，强制启用悬浮按钮
+     */
+    function startFloatingWatcher(force) {
+        if (floatingWatcherStarted) return;
+        if (!CONFIG.autoButton.enabled) return;
+        if (!force && getSiteRule()) return;   // 正常情况下命中规则就用内联按钮
+
+        floatingWatcherStarted = true;
+        if (force) allowFloaterOnSiteRule = true;
 
         let queued = false;
         const tick = function () {
@@ -926,11 +941,105 @@
     // ----------------------------------
 
     // ---------- 内联按钮注入（仅命中站点规则的站点） ----------
-    function addScreenShotEle(insertAfter) {
+    //
+    // ⚠️ 这里**绝对不能**往页面 DOM 里插节点（2026-11 踩过的坑）：
+    // B 站、直播站这类页面是「服务端渲染 + 前端水合」，脚本在 document-idle 就动手，
+    // 常常赶在 video.js 水合之前往 .pubdate-ip 后面 insertAdjacentElement 一个 <button>，
+    // 水合按 SSR 的子节点顺序找注释锚点就全错位，接着 appendChild 打到注释节点上，
+    // 抛 HierarchyRequestError，整页水合中断 —— 表现就是「只有播放器，其他全空白」。
+    //
+    // 现在改成：按钮挂在 <body>（#app 之外，水合不看 body 的多余子节点）上，
+    // 用 fixed 坐标贴到锚点右侧，看起来仍是「插在日期旁边」，但不碰页面一个节点。
+    const INLINE_MARGIN = 8;
+
+    /** 纯函数：锚点矩形 → 按钮的 fixed 坐标（贴右边居中，贴边时夹到视口内） */
+    function inlineButtonPosition(anchorRect, buttonSize, viewport) {
+        const left = anchorRect.right + INLINE_MARGIN;
+        const top = anchorRect.top + (anchorRect.height - buttonSize.height) / 2;
+        return {
+            left: Math.round(Math.max(4, Math.min(left, viewport.width - buttonSize.width - 4))),
+            top: Math.round(Math.max(4, Math.min(top, viewport.height - buttonSize.height - 4)))
+        };
+    }
+
+    let inlineAnchor = null;
+    let inlineWatcherStarted = false;
+
+    function updateInlinePosition() {
+        const btn = document.getElementById(CONFIG.buttonId);
+        if (!btn || btn.style.position !== 'fixed') return;
+
+        // 全屏时收起内联按钮：全屏画面里没有锚点，也不该挡画面（快捷键仍在）
+        if (inFullscreen()) {
+            btn.style.display = 'none';
+            return;
+        }
+
+        // 锚点被 SPA 重渲染掉时重新找一次
+        if (!inlineAnchor || inlineAnchor.isConnected === false) {
+            const rule = getSiteRule();
+            inlineAnchor = rule ? document.querySelector(rule.anchor) : null;
+        }
+        if (!inlineAnchor) {
+            btn.style.display = 'none';
+            return;
+        }
+
+        const rect = inlineAnchor.getBoundingClientRect();
+        if (rect.width === 0 && rect.height === 0) {
+            btn.style.display = 'none';
+            return;
+        }
+
+        const pos = inlineButtonPosition(
+            rect,
+            { width: btn.offsetWidth || 64, height: btn.offsetHeight || 28 },
+            { width: window.innerWidth, height: window.innerHeight }
+        );
+        btn.style.display = '';
+        btn.style.left = pos.left + 'px';
+        btn.style.top = pos.top + 'px';
+    }
+
+    // 滚动 / 缩放 / SPA 重渲染后浮层跟着锚点走；进全屏收起，退出全屏重新出现
+    function startInlineWatcher() {
+        if (inlineWatcherStarted) return;
+        inlineWatcherStarted = true;
+
+        let queued = false;
+        const tick = function () {
+            if (queued) return;
+            queued = true;
+            requestAnimationFrame(function () {
+                queued = false;
+                try { updateInlinePosition(); } catch (err) { log('内联按钮定位异常: ' + err); }
+            });
+        };
+
+        setInterval(tick, CONFIG.autoButton.pollInterval);
+        window.addEventListener('scroll', tick, true);
+        window.addEventListener('resize', tick);
+        document.addEventListener('fullscreenchange', tick);
+        document.addEventListener('webkitfullscreenchange', tick);
+    }
+
+    function addScreenShotEle(anchor) {
         if (document.getElementById(CONFIG.buttonId)) return;
         const btn = makeButton();
-        insertAfter.insertAdjacentElement('afterend', btn);
-        log("截图按钮已添加");
+
+        inlineAnchor = anchor && anchor.getBoundingClientRect ? anchor : null;
+        btn.dataset.inline = '1';
+        Object.assign(btn.style, {
+            position: 'fixed',
+            zIndex: '2147483646',
+            marginBottom: '0'
+        });
+
+        overlayHost().appendChild(btn);   // 只挂 body：不进 #app，也不进全屏元素
+        updateInlinePosition();
+        startInlineWatcher();
+
+        log('截图按钮已添加（浮层定位，未改动页面 DOM）');
         floater.suppress();            // 本框架用内联按钮
         relay.notifyInlineButton();    // 告诉子框架也别再显示悬浮按钮
     }
@@ -962,11 +1071,12 @@
 
             if (++tries >= CONFIG.maxCheckTimes) {
                 clearInterval(interval);
-                // 锚点一直没出现（站点改版？），退回插到视频元素后面
+                // 锚点一直没出现（站点改版？）→ 退回视频角落的悬浮按钮，
+                // **不要**插到 <video> 后面：那同样是往页面 DOM 里插节点，一样会崩水合。
                 const video = getBestVideo();
                 if (video) {
-                    addScreenShotEle(video);
-                    log('锚点 ' + rule.anchor + ' 未出现，按钮已退回插到视频后面');
+                    startFloatingWatcher(true);
+                    log('锚点 ' + rule.anchor + ' 未出现，改用视频角落的悬浮按钮');
                     startDomWatcher(rule);
                 } else {
                     log('锚点 ' + rule.anchor + ' 与视频均未出现，按钮未添加（快捷键仍可用）');
