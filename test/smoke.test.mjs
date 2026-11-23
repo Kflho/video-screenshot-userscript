@@ -10,8 +10,9 @@
  * 水合找注释锚点就错位，`appendChild` 打到注释节点上抛 HierarchyRequestError，
  * 整页水合中断 —— 现象是「只有播放器，其余全空白」。第 4、5 组测试用最小 DOM 替身盯着这件事。
  *
- * 2026-11 再追加：**全屏时不显示按钮**（第 6 组）。全屏画面就是视频本身，按钮只会挡画面；
- * 快捷键 `Ctrl+Shift+S` 仍在，全屏下用它截图。
+ * 2026-11 再追加：**全屏 / 网页全屏时不显示按钮**（第 6 组）。全屏画面就是视频本身，
+ * 按钮只会挡画面；网页全屏（B 站那种 CSS 铺满，不走 Fullscreen API）按「画面铺满视口」判。
+ * 快捷键 `Ctrl+Shift+S` 仍在，这两种情况下都用它截图。
  */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -130,14 +131,16 @@ function makeDomStub(options = {}) {
 	anchor.rect = { left: 100, top: 200, right: 300, bottom: 220, width: 200, height: 20 };
 	info.appendChild(anchor);
 
-	// 走悬浮按钮的站点没有水合锚点，只有 <video>：放一个可截图的（面积/就绪态都够）
+	// 走悬浮按钮的站点没有水合锚点，只有 <video>：放一个可截图的（面积/就绪态都够）。
+	// 默认高度 600（占视口 800 的 75%），不算「网页全屏」；用例里改 rect 来模拟铺满。
+	let video = null;
 	if (options.video) {
-		const video = makeEl('video');
+		video = makeEl('video');
 		video.videoWidth = 1920;
 		video.videoHeight = 1080;
 		video.readyState = 4;
 		video.paused = false;
-		video.rect = { left: 0, top: 0, right: 1280, bottom: 720, width: 1280, height: 720 };
+		video.rect = { left: 0, top: 0, right: 1280, bottom: 600, width: 1280, height: 600 };
 		body.appendChild(video);
 	}
 
@@ -223,15 +226,21 @@ function makeDomStub(options = {}) {
 	};
 	sandbox.globalThis = sandbox;
 
-	// 模拟进出全屏：先设 fullscreenElement，再把 fullscreenchange 派给已注册的监听
-	function setFullscreen(el) {
-		document.fullscreenElement = el;
-		for (const l of listeners.document) {
-			if (l.type === 'fullscreenchange' || l.type === 'webkitfullscreenchange') l.fn();
+	// 把事件派给已注册的监听（document 和 window 都算）
+	function fire(type) {
+		for (const l of listeners.document.concat(listeners.window)) {
+			if (l.type === type) l.fn();
 		}
 	}
 
-	return { sandbox, record, document, body, app, info, anchor, findById, setFullscreen };
+	// 模拟进出全屏：先设 fullscreenElement，再派 fullscreenchange
+	function setFullscreen(el) {
+		document.fullscreenElement = el;
+		fire('fullscreenchange');
+		fire('webkitfullscreenchange');
+	}
+
+	return { sandbox, record, document, body, app, info, anchor, video, findById, fire, setFullscreen };
 }
 
 test('内联按钮挂在 body 上，不往页面的 SSR 节点里插东西', () => {
@@ -299,7 +308,7 @@ test('悬浮按钮在全屏时收起，退出全屏回到视频角落', () => {
 	const btn = dom.findById('videoScreenshotBtn');
 	assert.ok(btn, '悬浮按钮没被创建');
 	assert.notEqual(btn.style.display, 'none', '非全屏时应显示悬浮按钮');
-	// 视频 1280x720 贴视口左上；默认 top-right、inset 12、按钮 64x28
+	// 视频 1280x600 贴视口左上；默认 top-right、inset 12、按钮 64x28
 	assert.equal(btn.style.left, '1204px');
 	assert.equal(btn.style.top, '12px');
 
@@ -308,4 +317,40 @@ test('悬浮按钮在全屏时收起，退出全屏回到视频角落', () => {
 
 	dom.setFullscreen(null);
 	assert.notEqual(btn.style.display, 'none', '退出全屏后悬浮按钮应重新出现');
+});
+
+test('网页全屏（CSS 铺满视口，无 Fullscreen API）时悬浮按钮也收起', () => {
+	const dom = makeDomStub({ hostname: 'example.com', video: true });
+	vm.createContext(dom.sandbox);
+	new vm.Script(source, { filename: FILE }).runInContext(dom.sandbox);
+
+	const btn = dom.findById('videoScreenshotBtn');
+	assert.notEqual(btn.style.display, 'none', '初始画面没铺满，应显示按钮');
+
+	// 站点用 CSS 把播放器铺满：video 盒子 = 视口，fullscreenElement 仍是 null
+	dom.video.rect = { left: 0, top: 0, right: 1280, bottom: 800, width: 1280, height: 800 };
+	dom.fire('resize');
+	assert.equal(btn.style.display, 'none', '网页全屏应收起悬浮按钮');
+
+	dom.video.rect = { left: 0, top: 0, right: 1280, bottom: 600, width: 1280, height: 600 };
+	dom.fire('resize');
+	assert.notEqual(btn.style.display, 'none', '退出网页全屏后悬浮按钮应重新出现');
+});
+
+test('网页全屏时内联按钮也收起（铺满判据对站点规则同样生效）', () => {
+	const dom = makeDomStub({ video: true });
+	vm.createContext(dom.sandbox);
+	new vm.Script(source, { filename: FILE }).runInContext(dom.sandbox);
+
+	const btn = dom.findById('videoScreenshotBtn');
+	assert.notEqual(btn.style.display, 'none', '初始画面没铺满，应显示按钮');
+
+	dom.video.rect = { left: 0, top: 0, right: 1280, bottom: 800, width: 1280, height: 800 };
+	dom.fire('resize');
+	assert.equal(btn.style.display, 'none', '网页全屏应收起内联按钮');
+
+	dom.video.rect = { left: 0, top: 0, right: 1280, bottom: 600, width: 1280, height: 600 };
+	dom.fire('resize');
+	assert.notEqual(btn.style.display, 'none', '退出网页全屏后内联按钮应重新出现');
+	assert.equal(btn.style.left, '308px', '回来后仍贴在锚点右侧');
 });

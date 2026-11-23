@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         视频截图到剪贴板
 // @namespace    https://github.com/Kflho
-// @version      1.2.5
+// @version      1.2.6
 // @description  Ctrl+Shift+S 或点视频画面角落的「截屏」按钮，把当前画面复制到剪贴板，直接粘进聊天框/文档。自动适配跨域 iframe 播放器（谁有画面谁抓帧、谁有剪贴板权限谁写入），无需为每个网站写规则。
 // @author       Kflho
 // @match        http*://*/*
@@ -36,7 +36,8 @@
 //   所以默认走通用方案——在视频画面角落浮一个按钮：
 //     · 谁持有 <video> 就在谁的文档里画（所以视频在跨域 iframe 里也照样显示在画面上）
 //     · position:fixed + getBoundingClientRect 跟随视频，改版/换播放器都不受影响
-//     · 全屏时不显示：全屏画面就是视频本身，按钮只会挡住画面；快捷键 Ctrl+Shift+S 照样能用
+//     · 全屏 / 网页全屏（画面铺满视口）时不显示：画面就是视频本身，按钮只会挡住；
+//       快捷键 Ctrl+Shift+S 照样能用
 //   想在某站用「正统」位置（像 B 站那样插在标题旁边），再往 SITE_RULES 里加一行即可，
 //   命中站点规则的站点会自动改用内联按钮、不再显示悬浮按钮。
 // ============================================================================
@@ -75,6 +76,7 @@
             minHeight: 160,
             minVisibleRatio: 0.3,         // 至少这么多比例露在视口里才显示
             idleOpacity: 0.55,            // 平时半透明，鼠标移上去变清晰
+            immersiveRatio: 0.9,          // 视频盒子宽高都达到视口的这个比例，就当作「网页全屏」，收起按钮
             pollInterval: 800             // 跟随视频位置的刷新间隔（滚动/缩放/全屏另有事件）
         },
         checkInterval: 1000,              // 命中站点规则后，等待锚点出现的轮询间隔
@@ -820,6 +822,28 @@
         return !!(document.fullscreenElement || document.webkitFullscreenElement);
     }
 
+    // 还有「网页全屏」：站点用 CSS 把播放器铺满视口，不走 Fullscreen API，
+    // document.fullscreenElement 是空的。判据只看「画面盒子是否铺满视口」，
+    // 不认站点类名（B 站、直播间、各种解析站都能覆盖）。
+    // 只查 <video>、不扫 shadow root：这是每次滚动 / 800ms 轮询都要跑的高频路径。
+    function viewportFillingVideo() {
+        const videos = document.querySelectorAll('video');
+        const w = window.innerWidth;
+        const h = window.innerHeight;
+        const ratio = CONFIG.autoButton.immersiveRatio;
+
+        for (let i = 0; i < videos.length; i++) {
+            const rect = videos[i].getBoundingClientRect();
+            if (rect.width >= w * ratio && rect.height >= h * ratio) return videos[i];
+        }
+        return null;
+    }
+
+    // 沉浸观看（全屏或网页全屏）时都不显示按钮，快捷键仍在
+    function inImmersiveMode() {
+        return inFullscreen() || !!viewportFillingVideo();
+    }
+
     function overlayHost() {
         return document.body || document.documentElement;
     }
@@ -872,8 +896,8 @@
         }
 
         function update() {
-            // 全屏只看画面，按钮收起来（快捷键仍在）
-            if (inFullscreen()) return hide();
+            // 全屏 / 网页全屏只看画面，按钮收起来（快捷键仍在）
+            if (inImmersiveMode()) return hide();
             if (!CONFIG.autoButton.enabled || suppressed || (!allowFloaterOnSiteRule && getSiteRule())) return hide();
 
             const video = pickVideo();
@@ -969,8 +993,8 @@
         const btn = document.getElementById(CONFIG.buttonId);
         if (!btn || btn.style.position !== 'fixed') return;
 
-        // 全屏时收起内联按钮：全屏画面里没有锚点，也不该挡画面（快捷键仍在）
-        if (inFullscreen()) {
+        // 全屏 / 网页全屏时收起内联按钮：画面里没有锚点，也不该挡画面（快捷键仍在）
+        if (inImmersiveMode()) {
             btn.style.display = 'none';
             return;
         }
